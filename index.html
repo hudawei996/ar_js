@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html>
+    <link rel="manifest" href="manifest.json">
+<head>
+    <meta charset="utf-8">
+    <title>AR.js Three.js Marker-Based Animation Demo</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.rawgit.com/mrdoob/three.js/r128/examples/js/loaders/GLTFLoader.js"></script>
+
+    <script src="https://cdn.rawgit.com/AR-js-org/AR.js/master/three.js/build/ar-threex-arjs.js"></script>
+<!-- 必须添加以下两个 AR.js 脚本 -->
+<script src="https://raw.githack.com/AR-js-org/AR.js/master/three.js/build/ar-threex.js"></script>
+<script src="https://raw.githack.com/AR-js-org/AR.js/master/three.js/build/ar-threex-arjs.js"></script>
+
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+    </style>
+</head>
+<body>
+    <script>
+        let scene, camera, renderer, arToolkitSource, arToolkitContext;
+        let markerRoot;
+        let model;
+        let mixer;
+        let clock = new THREE.Clock();
+
+        // (其余 JavaScript 代码不变)
+        function initScene() {
+            scene = new THREE.Scene();
+
+            // 创建透视相机
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            scene.add(camera);
+
+            // 创建WebGL渲染器
+            renderer = new THREE.WebGLRenderer({
+                antialias: true,
+                alpha: true // 允许背景透明，以便看到摄像头画面
+            });
+            renderer.setClearColor(new THREE.Color('lightgrey'), 0); // 清除颜色透明
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.domElement.style.position = 'absolute';
+            renderer.domElement.style.top = '0px';
+            renderer.domElement.style.left = '0px';
+            document.body.appendChild(renderer.domElement);
+
+            // 添加环境光
+            let ambientLight = new THREE.AmbientLight(0xcccccc, 0.9);
+            scene.add(ambientLight);
+            // 添加方向光
+            let directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(1, 1, 1).normalize();
+            scene.add(directionalLight);
+
+            // 初始化 AR.js 的 arToolkitSource (摄像头源)
+            arToolkitSource = new THREEx.ArToolkitSource({
+                sourceType : 'webcam',
+            });
+
+            arToolkitSource.init(function onReady(){
+                console.log("Camera is ready!");
+                onResize();
+            });
+
+            // 监听窗口大小变化以调整渲染器和摄像头
+            window.addEventListener('resize', function(){
+                onResize();
+            });
+
+            // 初始化 AR.js 的 arToolkitContext (核心追踪器)
+            arToolkitContext = new THREEx.ArToolkitContext({
+                cameraParametersUrl: 'data/camera_para.dat', // AR.js 提供的摄像头参数文件
+                detectionMode: 'mono', // 单通道灰度检测，适合大部分标记
+                // 如果使用自定义图案标记，需要设置 patternRatio
+                // patternRatio: 0.7, // 根据你的标记训练器设置的比例调整
+            });
+
+            // 初始化 arToolkitContext，然后监听 ready 事件
+            arToolkitContext.init(function onCompleted(){
+                // 相机投影矩阵初始化
+                camera.projectionMatrix.copy( arToolkitContext.getProjectionMatrix() );
+            });
+
+            // 创建一个 Three.js 组，所有 AR 对象都将添加到这里
+            markerRoot = new THREE.Group();
+            scene.add(markerRoot);
+
+            // 创建 AR 标记检测器
+            // 这里我们使用自定义的图案标记
+            let arMarkerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot, {
+                type : 'pattern',
+                patternUrl : 'pattern-head.patt', // **替换为你的 .patt 文件路径**
+                // patternUrl : 'data/patterns/kanji.patt', // 示例内置的Kanji标记
+                // patternUrl : 'data/patterns/hiro.patt', // 示例内置的Hiro标记
+                // debug: true // 开启调试模式可以看到标记边界
+            });
+
+            // 加载 3D 模型 (GLTF/GLB)
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                'crawling_robotic_spider.glb', // **替换为你的 3D 模型文件路径 (GLB 格式)**
+                function (gltf) {
+                    model = gltf.scene;
+                    // 根据需要调整模型的位置、旋转和缩放
+                    // 标记通常在中心，所以模型默认会出现在标记中心
+                    model.position.set(0, 0, 0); // 调整位置
+                    model.rotation.set(0, 0, 0); // 调整旋转
+                    model.scale.set(0.5, 0.5, 0.5); // 调整缩放，根据你的模型大小调整
+
+                    markerRoot.add(model); // 将模型添加到 markerRoot，使其随标记移动
+
+                    // 处理动画
+                    mixer = new THREE.AnimationMixer(model);
+                    gltf.animations.forEach((clip) => {
+                        mixer.clipAction(clip).play(); // 播放所有动画
+                    });
+                    console.log('3D Model and animations loaded!');
+                },
+                undefined, // onProgress callback (可选)
+                function (error) {
+                    console.error('Error loading 3D model', error);
+                }
+            );
+        }
+
+        // 窗口大小调整处理函数
+        function onResize() {
+            arToolkitSource.onResizeElement();
+            arToolkitSource.copyElementSizeTo(renderer.domElement);
+            if (arToolkitContext.arController !== null) {
+                arToolkitSource.copyElementSizeTo(arToolkitContext.arController.canvas);
+            }
+        }
+
+        // 动画渲染循环
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (arToolkitSource.ready === false) return;
+
+            arToolkitContext.update(arToolkitSource.domElement);
+
+            // 只有当模型和动画混合器加载完成时才更新动画
+            if (mixer) {
+                mixer.update(clock.getDelta());
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        // 启动应用
+        initScene();
+        animate();
+    </script>
+</body>
+</html>
