@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>WebXR Markerless AR Demo with Three.js</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+    <link rel="stylesheet" href="style.css"> </head>
+<body>
+    <div id="info" style="position: absolute; top: 0px; width: 100%; text-align: center; z-index: 1;">
+        <a href="https://github.com/mrdoob/three.js/tree/master/examples/webxr_ar_hittest.html" target="_blank" rel="noopener">three.js webxr - AR Hit Test</a><br/>
+        请点击屏幕放置模型
+    </div>
+
+    <div id="ar-button" style="position: absolute; bottom: 20px; width: 100%; text-align: center; z-index: 1;"></div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.rawgit.com/mrdoob/three.js/r128/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdn.rawgit.com/mrdoob/three.js/r128/examples/jsm/webxr/ARButton.js"></script>
+
+    <script>
+        let camera, scene, renderer;
+        let controller; // 用于处理用户的触摸输入
+        let reticle; // 视网膜（准星），用于指示命中测试的位置
+        let hitTestSource = null; // 命中测试源
+        let hitTestSourceRequested = false; // 命中测试源是否已请求
+        let model; // 你的 3D 模型
+        let mixer; // 动画混合器
+        let clock = new THREE.Clock(); // 用于动画更新
+
+        init();
+        animate();
+
+        function init() {
+            // Scene
+            scene = new THREE.Scene();
+
+            // Renderer
+            renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.xr.enabled = true; // 启用 WebXR
+
+            document.body.appendChild(renderer.domElement);
+
+            // AR Button
+            // ARButton.createButton(renderer, { requiredFeatures: [ 'hit-test', 'dom-overlay', 'dom-overlay-for-handheld-ar' ] });
+            // For basic hit-test without overlay, simpler:
+            document.getElementById('ar-button').appendChild(ARButton.createButton(renderer, { requiredFeatures: ['hit-test'] }));
+
+            // Camera (WebXR 会管理相机位置和姿态，这里只设置一个默认值)
+            camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 20); // WebXR typically uses smaller near/far
+            // scene.add(camera); // WebXR manages the camera within the session
+
+            // Reticle (准星，指示物体放置位置)
+            // 这是一个简单的环形几何体，用于在检测到平面时显示
+            reticle = new THREE.Mesh(
+                new THREE.RingGeometry(0.15, 0.2, 32).rotateX(-Math.PI / 2),
+                new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.5 })
+            );
+            reticle.matrixAutoUpdate = false; // 通过 WebXR 帧回调手动更新其姿态
+            reticle.visible = false;
+            scene.add(reticle);
+
+            // 加载 3D 模型 (GLTF/GLB)
+            const loader = new THREE.GLTFLoader();
+            loader.load(
+                'fox.glb', // 替换为你的 3D 模型文件路径 (GLB 格式)
+                function (gltf) {
+                    model = gltf.scene;
+                    model.scale.set(0.2, 0.2, 0.2); // 调整缩放，适合放置大小
+                    // 模型初始不添加到场景，待点击放置后添加
+                    // model.visible = false; // 或者不设置可见性，等待放置
+
+                    // 处理动画
+                    if (gltf.animations && gltf.animations.length) {
+                        mixer = new THREE.AnimationMixer(model);
+                        gltf.animations.forEach((clip) => {
+                            mixer.clipAction(clip).play();
+                        });
+                        console.log('3D Model and animations loaded!');
+                    } else {
+                        console.log('3D Model loaded, but no animations found.');
+                    }
+                },
+                undefined,
+                function (error) {
+                    console.error('Error loading 3D model', error);
+                }
+            );
+
+            // Lights
+            scene.add(new THREE.AmbientLight(0xffffff, 1.0)); // 环境光
+            scene.add(new THREE.DirectionalLight(0xffffff, 0.8)); // 方向光
+
+            // Controller (处理用户点击)
+            controller = renderer.xr.getController(0);
+            controller.addEventListener('select', onSelect); // 监听用户点击事件
+            scene.add(controller);
+
+            window.addEventListener('resize', onWindowResize, false);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onSelect() {
+            if (reticle.visible && model) { // 只有当准星可见（即命中测试成功）且模型已加载
+                const newModel = model.clone(); // 克隆模型，以便放置多个
+                newModel.position.setFromMatrixPosition(reticle.matrix); // 设置模型位置到准星位置
+                // 可以根据需要调整模型Y轴，让它坐在平面上
+                // newModel.position.y += newModel.scale.y * 0.5; // 例如，如果模型原点在底部中心
+
+                scene.add(newModel); // 将模型添加到场景中
+
+                // 如果模型有动画，为克隆的模型创建新的 Mixer
+                if (mixer && model.animations && model.animations.length) {
+                    const newMixer = new THREE.AnimationMixer(newModel);
+                    model.animations.forEach((clip) => {
+                        newMixer.clipAction(clip).play();
+                    });
+                    newModel.userData.mixer = newMixer; // 将 mixer 存储在模型的 userData 中
+                }
+            }
+        }
+
+        function animate() {
+            renderer.setAnimationLoop(render);
+        }
+
+        function render(timestamp, frame) {
+            if (frame) {
+                const referenceSpace = renderer.xr.getReferenceSpace(); // 获取参考空间
+                const session = renderer.xr.getSession(); // 获取 XR 会话
+
+                if (hitTestSourceRequested === false) {
+                    session.requestReferenceSpace('viewer').then(function (referenceSpace) {
+                        session.requestHitTestSource({ space: referenceSpace }).then(function (source) {
+                            hitTestSource = source;
+                        });
+                    });
+                    session.addEventListener('end', function () { // 监听 AR 会话结束
+                        hitTestSourceRequested = false;
+                        hitTestSource = null;
+                    });
+                    hitTestSourceRequested = true;
+                }
+
+                if (hitTestSource) {
+                    const hitTestResults = frame.getHitTestResults(hitTestSource);
+                    if (hitTestResults.length) {
+                        const hit = hitTestResults[0];
+                        // 更新准星位置和姿态
+                        reticle.visible = true;
+                        reticle.matrix.fromArray(hit.pose.transform.matrix);
+                    } else {
+                        reticle.visible = false;
+                    }
+                }
+            }
+
+            // 更新所有模型的动画混合器
+            scene.traverse(function(object) {
+                if (object.userData.mixer) {
+                    object.userData.mixer.update(clock.getDelta());
+                } else if (object === model && mixer) { // 确保原始模型如果有动画也更新 (如果它被添加到场景中)
+                    mixer.update(clock.getDelta());
+                }
+            });
+
+            renderer.render(scene, camera);
+        }
+
+    </script>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            color: #fff;
+            font-family: monospace;
+            padding: 10px;
+            background: rgba(0, 0, 0, 0.5);
+            border-radius: 5px;
+        }
+    </style>
+</body>
+</html>
